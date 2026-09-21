@@ -83,6 +83,23 @@ find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
+find_package(jsoncpp CONFIG QUIET)
+
+# OpenCV must be resolved before any package that exports an OpenCV
+# dependency of its own (cv_bridge, below). OpenCVConfig.cmake accumulates
+# discovered modules into OpenCV_LIBS/OpenCV_LIBRARIES across repeated
+# find_package(OpenCV) calls within the same configure run rather than
+# replacing them, and a component-less call anywhere pulls in every module
+# the system OpenCV was built with -- including "viz", which links a system
+# VTK build whose own fmt dependency is ABI-incompatible with the fmt used
+# elsewhere in this build (and drags in a mismatched Qt6), producing link
+# errors unrelated to fast_livo's own code. fast_livo only uses OpenCV's
+# core/imgproc/imgcodecs/highgui APIs (cv::Mat, cvtColor, resize, imshow,
+# imwrite, etc.), so request exactly those components here, first, so that
+# cv_bridge's own (component-less) re-resolution of "OpenCV" later just
+# reuses this already-found, narrow result instead of accumulating everything.
+find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs highgui)
+
 find_package(pcl_ros REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(tf2_ros REQUIRED)
@@ -93,8 +110,16 @@ find_package(cv_bridge REQUIRED)
 find_package(image_transport REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(PCL REQUIRED)
-find_package(OpenCV REQUIRED)
 find_package(Sophus REQUIRED)
+# Modern Sophus (>=1.x) is a target-based, header-only CMake package config
+# and does not define the legacy Sophus_INCLUDE_DIRS / Sophus_LIBRARIES
+# variables this file uses below. Fall back to the exported target.
+if(NOT Sophus_INCLUDE_DIRS AND TARGET Sophus::Sophus)
+  get_target_property(Sophus_INCLUDE_DIRS Sophus::Sophus INTERFACE_INCLUDE_DIRECTORIES)
+endif()
+if(NOT Sophus_LIBRARIES AND TARGET Sophus::Sophus)
+  set(Sophus_LIBRARIES Sophus::Sophus)
+endif()
 find_package(Boost REQUIRED COMPONENTS thread)
 find_package(fmt REQUIRED)
 
@@ -148,9 +173,16 @@ ament_target_dependencies(imu_proc ${dependencies})
 ament_target_dependencies(laser_mapping ${dependencies})
 
 # linking libraries or executables to public dependencies
-target_link_libraries(laser_mapping 
-    ${CMAKE_SOURCE_DIR}/../../install/vikit_common/lib/libvikit_common.so 
-    ${CMAKE_SOURCE_DIR}/../../install/vikit_ros/lib/libvikit_ros.so
+# Note: vikit_common and vikit_ros are already linked via
+# ament_target_dependencies(laser_mapping ${dependencies}) above, which
+# resolves them through their exported CMake package config rather than a
+# hardcoded path. A previous hardcoded path here
+# (${CMAKE_SOURCE_DIR}/../../install/vikit_common/lib/libvikit_common.so)
+# assumed fast_livo lived exactly two directories below a colcon workspace
+# root sharing that install/ directory, which does not hold when fast_livo
+# is nested deeper (e.g. as a third_party dependency) or when vikit_common
+# is built in a separate workspace.
+target_link_libraries(laser_mapping
     ${COMMON_DEPENDENCIES}
 )
 target_link_libraries(vio ${COMMON_DEPENDENCIES})
